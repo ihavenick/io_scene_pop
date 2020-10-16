@@ -104,10 +104,9 @@ def blender_add_material(blend_data, name, texture_name):
     if not name in blend_data.materials:
         material = blend_data.materials.new(name)
         material["texture_name"] = texture_name # to add it later on
-        material.use_transparency = True
-        material.alpha = 0
-        material.specular_alpha = 0
-        material.diffuse_intensity = 1
+        #material.use_transparency = True 2.90 doesnt have this settibg
+        material.blend_method = 'CLIP'
+        material.alpha_threshold = 0
         material.specular_intensity = 0
 
 
@@ -119,7 +118,7 @@ def blender_add_mesh(blend_data, name, vertices, faces, uvs, uv_indices,
 
         # add uvs to mesh
         if len(uvs) > 0:
-            mesh.uv_textures.new().name = "UVMap"
+            mesh.uv_layers.new().name = "UVMap"
             uv_data = mesh.uv_layers[0].data
             if len(uv_indices) > 0:
                 for face_index, face in enumerate(mesh.polygons):
@@ -169,13 +168,13 @@ def add_materials_to_mesh(blend_data, mesh, material_pack, material_ids):
 def add_bounding_box_material(blend_data, mesh, group_name):
     color = None
     if group_name == "Trigger":
-        color = (0, 1, 1)
+        color = (0, 1, 1,1)
     elif group_name == "Portal":
-        color = (0, 1, 0)
+        color = (0, 1, 0,1)
     elif group_name == "Set Position":
-        color = (0, 0, 1)
+        color = (0, 0, 1,1)
     elif group_name == "Loading Trigger":
-        color = (1, 0.5, 0)
+        color = (1, 0.5, 0,1)
 
     if color is not None:
         try:
@@ -183,10 +182,10 @@ def add_bounding_box_material(blend_data, mesh, group_name):
         except KeyError:
             material = blend_data.materials.new(group_name)
             material.diffuse_color = color
-            material.diffuse_intensity = 1
+            material.blend_method = 'CLIP'
+            material.alpha_threshold = 0.3
             material.specular_intensity = 0
-            material.use_transparency = True
-            material.alpha = 0.3
+
         mesh.materials.append(material)
         return True
     return False
@@ -259,7 +258,7 @@ def import_wol(path, context, wow_hashes):
 def import_wow(path, context, textures_only, wow_hashes):
 
     blend_data = context.blend_data
-    scene = context.scene
+    scene = bpy.context.scene
 
 
     directory = os.path.dirname(path)
@@ -751,21 +750,24 @@ def import_wow(path, context, textures_only, wow_hashes):
 
 
     if not "PoP_Lamp1" in blend_data.objects:
-        lamp1 = blend_data.lamps.new("PoP_Lamp1", 'HEMI')
+        lamp1 = blend_data.lights.new("PoP_Lamp1", 'SUN')
         lamp1.energy = 0.5
-        lamp2 = blend_data.lamps.new("PoP_Lamp2", 'HEMI')
+        lamp2 = blend_data.lights.new("PoP_Lamp2", 'SUN')
         lamp2.energy = 0.3
         object = blend_data.objects.new("PoP_Lamp1", lamp1)
-        scene.objects.link(object)
+        scene.collection.objects.link(object)
         object = blend_data.objects.new("PoP_Lamp2", lamp2)
         object.rotation_euler = (0, 3.14159, 0)
-        scene.objects.link(object)
-    scene.game_settings.material_mode = 'GLSL'
+        scene.collection.objects.link(object)
+    #scene.game_settings.material_mode = 'GLSL'
 
 
     for material_hash in material_hashes:
         material = blend_data.materials[material_hash]
+        material.use_nodes = True
         texture_name = material["texture_name"]
+        texture_path = os.path.join(texture_directory,
+                                            texture_name + ".dds")
         try:
             texture = blend_data.textures[texture_name]
         except KeyError:
@@ -778,15 +780,25 @@ def import_wow(path, context, textures_only, wow_hashes):
                 print("Missing texture", texture_name, "for material",
                       material_hash, "!")
                 continue
-        if material.texture_slots[0] is None:
-            mat_texture = material.texture_slots.add()
-            mat_texture.texture = texture
-            mat_texture.texture_coords = 'UV'
-            mat_texture.use_map_color_diffuse = True
-            mat_texture.use_map_alpha = True
-            mat_texture.mapping = 'FLAT'
-            mat_texture.uv_layer = "UVMap"
-            mat_texture.scale = (1, -1, 1)
+        if material is not None:
+
+            bsdf = material.node_tree.nodes["Principled BSDF"]
+            mat_texture = material.node_tree.nodes.new('ShaderNodeTexImage')
+            mat_texture.image = bpy.data.images.load(texture_path)
+            
+            
+            
+
+            material.node_tree.links.new(bsdf.inputs['Base Color'], mat_texture.outputs['Color'])
+            material.node_tree.links.new(bsdf.inputs['Alpha'], mat_texture.outputs['Alpha'])
+            # mat_texture = material.texture_slots.add()
+            # mat_texture.texture = texture
+            # mat_texture.texture_coords = 'UV'
+            # mat_texture.use_map_color_diffuse = True
+        
+            # mat_texture.mapping = 'FLAT'
+            # mat_texture.uv_layer = "UVMap"
+            # mat_texture.scale = (1, -1, 1)
 
 
     for game_object in game_objects:
@@ -839,8 +851,8 @@ def import_wow(path, context, textures_only, wow_hashes):
             object.location = game_object.center
             object.rotation_euler = game_object.rotation.to_euler()
             object.scale = game_object.scale
-            scene.objects.link(object)
-            scene.objects.active = object
+            scene.collection.objects.link(object)
+            context.view_layer.objects.active = object
 
             if mesh_second is not None:
                 # create object
@@ -907,23 +919,24 @@ def import_wow(path, context, textures_only, wow_hashes):
                 object.show_transparent = True
                 object.show_wire = True
             else:
-                object.draw_type = 'BOUNDS'
+                object.display_type = 'BOUNDS'
 
-            scene.objects.link(object)
-            scene.objects.active = object
+            scene.collection.objects.link(object)
+            context.view_layer.objects.active = object
 
         object["out_of_file"] = filename
 
         try:
-            group = blend_data.groups[game_object.group]
+            group = blend_data.collections[game_object.group]
         except KeyError:
-            group = blend_data.groups.new(game_object.group)
+            group = blend_data.collections.new(game_object.group)
         group.objects.link(object)
         if (game_object.group != "Trigger" and
             game_object.group != "Model" and
             game_object.group != "Other" and
             game_object.group != "Portal" and
             game_object.group != "Loading Trigger"):
-            object.hide = True
+            object.hide_get()
+            object.hide_set(True)
 
 
